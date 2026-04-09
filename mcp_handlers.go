@@ -27,6 +27,49 @@ func parseVisibility(args map[string]interface{}) string {
 	return ""
 }
 
+func buildPublishRequestFromArgs(args map[string]interface{}) *PublishRequest {
+	title, _ := args["title"].(string)
+	content, _ := args["content"].(string)
+	imagePathsInterface, _ := args["images"].([]interface{})
+	tagsInterface, _ := args["tags"].([]interface{})
+	productsInterface, _ := args["products"].([]interface{})
+
+	var imagePaths []string
+	for _, path := range imagePathsInterface {
+		if pathStr, ok := path.(string); ok {
+			imagePaths = append(imagePaths, pathStr)
+		}
+	}
+
+	var tags []string
+	for _, tag := range tagsInterface {
+		if tagStr, ok := tag.(string); ok {
+			tags = append(tags, tagStr)
+		}
+	}
+
+	var products []string
+	for _, p := range productsInterface {
+		if pStr, ok := p.(string); ok {
+			products = append(products, pStr)
+		}
+	}
+
+	scheduleAt, _ := args["schedule_at"].(string)
+	isOriginal, _ := args["is_original"].(bool)
+
+	return &PublishRequest{
+		Title:      title,
+		Content:    content,
+		Images:     imagePaths,
+		Tags:       tags,
+		ScheduleAt: scheduleAt,
+		IsOriginal: isOriginal,
+		Visibility: parseVisibility(args),
+		Products:   products,
+	}
+}
+
 // handleCheckLoginStatus 处理检查登录状态
 func (s *AppServer) handleCheckLoginStatus(ctx context.Context) *MCPToolResult {
 	logrus.Info("MCP: 检查登录状态")
@@ -124,56 +167,9 @@ func (s *AppServer) handleDeleteCookies(ctx context.Context) *MCPToolResult {
 func (s *AppServer) handlePublishContent(ctx context.Context, args map[string]interface{}) *MCPToolResult {
 	logrus.Info("MCP: 发布内容")
 
-	// 解析参数
-	title, _ := args["title"].(string)
-	content, _ := args["content"].(string)
-	imagePathsInterface, _ := args["images"].([]interface{})
-	tagsInterface, _ := args["tags"].([]interface{})
-	productsInterface, _ := args["products"].([]interface{})
+	req := buildPublishRequestFromArgs(args)
+	logrus.Infof("MCP: 发布内容 - 标题: %s, 图片数量: %d, 标签数量: %d, 定时: %s, 原创: %v, visibility: %s, 商品: %v", req.Title, len(req.Images), len(req.Tags), req.ScheduleAt, req.IsOriginal, req.Visibility, req.Products)
 
-	var imagePaths []string
-	for _, path := range imagePathsInterface {
-		if pathStr, ok := path.(string); ok {
-			imagePaths = append(imagePaths, pathStr)
-		}
-	}
-
-	var tags []string
-	for _, tag := range tagsInterface {
-		if tagStr, ok := tag.(string); ok {
-			tags = append(tags, tagStr)
-		}
-	}
-
-	var products []string
-	for _, p := range productsInterface {
-		if pStr, ok := p.(string); ok {
-			products = append(products, pStr)
-		}
-	}
-
-	// 解析定时发布参数
-	scheduleAt, _ := args["schedule_at"].(string)
-	visibility := parseVisibility(args)
-
-	// 解析原创参数
-	isOriginal, _ := args["is_original"].(bool)
-
-	logrus.Infof("MCP: 发布内容 - 标题: %s, 图片数量: %d, 标签数量: %d, 定时: %s, 原创: %v, visibility: %s, 商品: %v", title, len(imagePaths), len(tags), scheduleAt, isOriginal, visibility, products)
-
-	// 构建发布请求
-	req := &PublishRequest{
-		Title:      title,
-		Content:    content,
-		Images:     imagePaths,
-		Tags:       tags,
-		ScheduleAt: scheduleAt,
-		IsOriginal: isOriginal,
-		Visibility: visibility,
-		Products:   products,
-	}
-
-	// 执行发布
 	result, err := s.xiaohongshuService.PublishContent(ctx, req)
 	if err != nil {
 		return &MCPToolResult{
@@ -185,11 +181,107 @@ func (s *AppServer) handlePublishContent(ctx context.Context, args map[string]in
 		}
 	}
 
-	resultText := fmt.Sprintf("内容发布成功: %+v", result)
 	return &MCPToolResult{
 		Content: []MCPContent{{
 			Type: "text",
-			Text: resultText,
+			Text: fmt.Sprintf("内容发布成功: %+v", result),
+		}},
+	}
+}
+
+// handleSaveDraft 处理保存草稿
+func (s *AppServer) handleSaveDraft(ctx context.Context, args map[string]interface{}) *MCPToolResult {
+	logrus.Info("MCP: 保存草稿")
+
+	req := buildPublishRequestFromArgs(args)
+	logrus.Infof("MCP: 保存草稿 - 标题: %s, 图片数量: %d, 标签数量: %d, 定时: %s, 原创: %v, visibility: %s, 商品: %v", req.Title, len(req.Images), len(req.Tags), req.ScheduleAt, req.IsOriginal, req.Visibility, req.Products)
+
+	result, err := s.xiaohongshuService.SaveDraft(ctx, req)
+	if err != nil {
+		return &MCPToolResult{
+			Content: []MCPContent{{
+				Type: "text",
+				Text: "保存草稿失败: " + err.Error(),
+			}},
+			IsError: true,
+		}
+	}
+
+	return &MCPToolResult{
+		Content: []MCPContent{{
+			Type: "text",
+			Text: fmt.Sprintf("草稿保存成功: %+v", result),
+		}},
+	}
+}
+
+// handleListLocalDrafts 处理列出本地草稿
+func (s *AppServer) handlePublishLocalDraft(ctx context.Context, args map[string]interface{}) *MCPToolResult {
+	logrus.Info("MCP: 根据本地草稿发布")
+
+	draftID, _ := args["draft_id"].(string)
+	draftID = strings.TrimSpace(draftID)
+	if draftID == "" {
+		return &MCPToolResult{
+			Content: []MCPContent{{
+				Type: "text",
+				Text: "根据本地草稿发布失败: 缺少 draft_id 参数",
+			}},
+			IsError: true,
+		}
+	}
+
+	logrus.Infof("MCP: 根据本地草稿发布 - draft_id: %s", draftID)
+
+	result, err := s.xiaohongshuService.PublishLocalDraft(ctx, draftID)
+	if err != nil {
+		return &MCPToolResult{
+			Content: []MCPContent{{
+				Type: "text",
+				Text: "根据本地草稿发布失败: " + err.Error(),
+			}},
+			IsError: true,
+		}
+	}
+
+	return &MCPToolResult{
+		Content: []MCPContent{{
+			Type: "text",
+			Text: fmt.Sprintf("本地草稿发布成功: %+v", result),
+		}},
+	}
+}
+
+func (s *AppServer) handleListLocalDrafts(ctx context.Context) *MCPToolResult {
+
+	logrus.Info("MCP: 列出本地草稿")
+
+	result, err := s.xiaohongshuService.ListLocalDrafts(ctx)
+	if err != nil {
+		return &MCPToolResult{
+			Content: []MCPContent{{
+				Type: "text",
+				Text: "列出本地草稿失败: " + err.Error(),
+			}},
+			IsError: true,
+		}
+	}
+
+	jsonData, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		return &MCPToolResult{
+			Content: []MCPContent{{
+				Type: "text",
+				Text: "序列化本地草稿失败: " + err.Error(),
+			}},
+			IsError: true,
+		}
+	}
+
+	return &MCPToolResult{
+		Content: []MCPContent{{
+			Type: "text",
+			Text: string(jsonData),
 		}},
 	}
 }

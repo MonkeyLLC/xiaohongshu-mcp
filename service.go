@@ -14,6 +14,7 @@ import (
 	"github.com/xpzouying/xiaohongshu-mcp/configs"
 	"github.com/xpzouying/xiaohongshu-mcp/cookies"
 	"github.com/xpzouying/xiaohongshu-mcp/pkg/downloader"
+	"github.com/xpzouying/xiaohongshu-mcp/pkg/draftstore"
 	"github.com/xpzouying/xiaohongshu-mcp/pkg/xhsutil"
 	"github.com/xpzouying/xiaohongshu-mcp/xiaohongshu"
 )
@@ -53,11 +54,13 @@ type LoginQrcodeResponse struct {
 
 // PublishResponse 发布响应
 type PublishResponse struct {
-	Title   string `json:"title"`
-	Content string `json:"content"`
-	Images  int    `json:"images"`
-	Status  string `json:"status"`
-	PostID  string `json:"post_id,omitempty"`
+	Title     string `json:"title"`
+	Content   string `json:"content"`
+	Images    int    `json:"images"`
+	Status    string `json:"status"`
+	PostID    string `json:"post_id,omitempty"`
+	DraftID   string `json:"draft_id,omitempty"`
+	DraftPath string `json:"draft_path,omitempty"`
 }
 
 // PublishVideoRequest 发布视频请求（仅支持本地单个视频文件）
@@ -173,53 +176,9 @@ func (s *XiaohongshuService) GetLoginQrcode(ctx context.Context) (*LoginQrcodeRe
 
 // PublishContent 发布内容
 func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishRequest) (*PublishResponse, error) {
-	// 验证标题长度（小红书限制：最大20个字）
-	if xhsutil.CalcTitleLength(req.Title) > 20 {
-		return nil, fmt.Errorf("标题长度超过限制")
-	}
-
-	// 处理图片：下载URL图片或使用本地路径
-	imagePaths, err := s.processImages(req.Images)
+	content, err := s.preparePublishImageContent(req)
 	if err != nil {
 		return nil, err
-	}
-
-	// 解析定时发布时间
-	var scheduleTime *time.Time
-	if req.ScheduleAt != "" {
-		t, err := time.Parse(time.RFC3339, req.ScheduleAt)
-		if err != nil {
-			return nil, fmt.Errorf("定时发布时间格式错误，请使用 ISO8601 格式: %v", err)
-		}
-
-		// 校验定时发布时间范围：1小时至14天
-		now := time.Now()
-		minTime := now.Add(1 * time.Hour)
-		maxTime := now.Add(14 * 24 * time.Hour)
-
-		if t.Before(minTime) {
-			return nil, fmt.Errorf("定时发布时间必须至少在1小时后，当前设置: %s，最早可选: %s",
-				t.Format("2006-01-02 15:04"), minTime.Format("2006-01-02 15:04"))
-		}
-		if t.After(maxTime) {
-			return nil, fmt.Errorf("定时发布时间不能超过14天，当前设置: %s，最晚可选: %s",
-				t.Format("2006-01-02 15:04"), maxTime.Format("2006-01-02 15:04"))
-		}
-
-		scheduleTime = &t
-		logrus.Infof("设置定时发布时间: %s", t.Format("2006-01-02 15:04"))
-	}
-
-	// 构建发布内容
-	content := xiaohongshu.PublishImageContent{
-		Title:        req.Title,
-		Content:      req.Content,
-		Tags:         req.Tags,
-		ImagePaths:   imagePaths,
-		ScheduleTime: scheduleTime,
-		IsOriginal:   req.IsOriginal,
-		Visibility:   req.Visibility,
-		Products:     req.Products,
 	}
 
 	// 执行发布
@@ -231,11 +190,95 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
 	response := &PublishResponse{
 		Title:   req.Title,
 		Content: req.Content,
-		Images:  len(imagePaths),
+		Images:  len(content.ImagePaths),
 		Status:  "发布完成",
 	}
 
 	return response, nil
+}
+
+// SaveDraft 保存图文内容到草稿箱
+func (s *XiaohongshuService) SaveDraft(ctx context.Context, req *PublishRequest) (*PublishResponse, error) {
+	content, err := s.preparePublishImageContent(req)
+	if err != nil {
+		return nil, err
+	}
+
+	if err := s.saveDraftContent(ctx, content); err != nil {
+		logrus.Errorf("failed to save draft in browser: title=%s %v", content.Title, err)
+		return nil, err
+	}
+
+	localDraft, err := draftstore.SaveLocalDraft(draftstore.SaveInput{
+		Title:               req.Title,
+		Content:             req.Content,
+		Tags:                req.Tags,
+		SourceImages:        req.Images,
+		ProcessedImagePaths: content.ImagePaths,
+		ScheduleAt:          req.ScheduleAt,
+		IsOriginal:          req.IsOriginal,
+		Visibility:          req.Visibility,
+		Products:            req.Products,
+	})
+	if err != nil {
+		logrus.Errorf("failed to save local draft: title=%s %v", content.Title, err)
+		return nil, err
+	}
+
+	return &PublishResponse{
+		Title:     req.Title,
+		Content:   req.Content,
+		Images:    len(content.ImagePaths),
+		Status:    "草稿已保存",
+		DraftID:   localDraft.DraftID,
+		DraftPath: localDraft.DraftPath,
+	}, nil
+}
+
+func (s *XiaohongshuService) preparePublishImageContent(req *PublishRequest) (xiaohongshu.PublishImageContent, error) {
+	if xhsutil.CalcTitleLength(req.Title) > 20 {
+		return xiaohongshu.PublishImageContent{}, fmt.Errorf("标题长度超过限制")
+	}
+
+	imagePaths, err := s.processImages(req.Images)
+	if err != nil {
+		return xiaohongshu.PublishImageContent{}, err
+	}
+
+	var scheduleTime *time.Time
+	if req.ScheduleAt != "" {
+		t, err := time.Parse(time.RFC3339, req.ScheduleAt)
+		if err != nil {
+			return xiaohongshu.PublishImageContent{}, fmt.Errorf("定时发布时间格式错误，请使用 ISO8601 格式: %v", err)
+		}
+
+		now := time.Now()
+		minTime := now.Add(1 * time.Hour)
+		maxTime := now.Add(14 * 24 * time.Hour)
+
+		if t.Before(minTime) {
+			return xiaohongshu.PublishImageContent{}, fmt.Errorf("定时发布时间必须至少在1小时后，当前设置: %s，最早可选: %s",
+				t.Format("2006-01-02 15:04"), minTime.Format("2006-01-02 15:04"))
+		}
+		if t.After(maxTime) {
+			return xiaohongshu.PublishImageContent{}, fmt.Errorf("定时发布时间不能超过14天，当前设置: %s，最晚可选: %s",
+				t.Format("2006-01-02 15:04"), maxTime.Format("2006-01-02 15:04"))
+		}
+
+		scheduleTime = &t
+		logrus.Infof("设置定时发布时间: %s", t.Format("2006-01-02 15:04"))
+	}
+
+	return xiaohongshu.PublishImageContent{
+		Title:        req.Title,
+		Content:      req.Content,
+		Tags:         req.Tags,
+		ImagePaths:   imagePaths,
+		ScheduleTime: scheduleTime,
+		IsOriginal:   req.IsOriginal,
+		Visibility:   req.Visibility,
+		Products:     req.Products,
+	}, nil
 }
 
 // processImages 处理图片列表，支持URL下载和本地路径
@@ -259,6 +302,78 @@ func (s *XiaohongshuService) publishContent(ctx context.Context, content xiaohon
 
 	// 执行发布
 	return action.Publish(ctx, content)
+}
+
+// saveDraftContent 执行保存草稿
+func (s *XiaohongshuService) saveDraftContent(ctx context.Context, content xiaohongshu.PublishImageContent) error {
+	b := newBrowser()
+	defer b.Close()
+
+	page := b.NewPage()
+	defer page.Close()
+
+	action, err := xiaohongshu.NewPublishImageAction(page)
+	if err != nil {
+		return err
+	}
+
+	return action.SaveDraft(ctx, content)
+}
+
+// PublishLocalDraft 根据本地草稿发布
+func (s *XiaohongshuService) PublishLocalDraft(ctx context.Context, draftID string) (*PublishResponse, error) {
+	draft, err := draftstore.GetLocalDraft(draftID)
+	if err != nil {
+		return nil, err
+	}
+
+	if draft.Record == nil {
+		return nil, fmt.Errorf("草稿记录为空: %s", draftID)
+	}
+	if len(draft.Record.Images) == 0 {
+		return nil, fmt.Errorf("草稿未包含可发布图片: %s", draftID)
+	}
+
+	for _, imagePath := range draft.Record.Images {
+		if _, err := os.Stat(imagePath); err != nil {
+			return nil, fmt.Errorf("草稿图片不存在或不可访问: %s: %w", imagePath, err)
+		}
+	}
+
+	req := &PublishRequest{
+		Title:      draft.Record.Title,
+		Content:    draft.Record.Content,
+		Images:     append([]string(nil), draft.Record.Images...),
+		Tags:       append([]string(nil), draft.Record.Tags...),
+		ScheduleAt: draft.Record.ScheduleAt,
+		IsOriginal: draft.Record.IsOriginal,
+		Visibility: draft.Record.Visibility,
+		Products:   append([]string(nil), draft.Record.Products...),
+	}
+
+	result, err := s.PublishContent(ctx, req)
+	if err != nil {
+		logrus.Errorf("根据本地草稿发布失败: draft_id=%s %v", draftID, err)
+		return nil, err
+	}
+
+	result.DraftID = draft.Record.ID
+	result.DraftPath = draft.DraftPath
+	result.Status = "本地草稿发布完成"
+	return result, nil
+}
+
+// ListLocalDrafts 列出本地草稿
+func (s *XiaohongshuService) ListLocalDrafts(ctx context.Context) (*draftstore.ListResult, error) {
+	_ = ctx
+
+	result, err := draftstore.ListLocalDrafts()
+	if err != nil {
+		logrus.Errorf("列出本地草稿失败: %v", err)
+		return nil, err
+	}
+
+	return result, nil
 }
 
 // PublishVideo 发布视频（本地文件）

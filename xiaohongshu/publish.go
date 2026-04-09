@@ -94,6 +94,32 @@ func (p *PublishAction) Publish(ctx context.Context, content PublishImageContent
 	return nil
 }
 
+func (p *PublishAction) SaveDraft(ctx context.Context, content PublishImageContent) error {
+	if len(content.ImagePaths) == 0 {
+		return errors.New("图片不能为空")
+	}
+
+	page := p.page.Context(ctx)
+
+	if err := uploadImages(page, content.ImagePaths); err != nil {
+		return errors.Wrap(err, "小红书上传图片失败")
+	}
+
+	tags := content.Tags
+	if len(tags) >= 10 {
+		logrus.Warnf("标签数量超过10，截取前10个标签")
+		tags = tags[:10]
+	}
+
+	logrus.Infof("保存草稿: title=%s, images=%v, tags=%v, schedule=%v, original=%v, visibility=%s, products=%v", content.Title, len(content.ImagePaths), tags, content.ScheduleTime, content.IsOriginal, content.Visibility, content.Products)
+
+	if err := submitDraft(page, content.Title, content.Content, tags, content.ScheduleTime, content.IsOriginal, content.Visibility, content.Products); err != nil {
+		return errors.Wrap(err, "小红书保存草稿失败")
+	}
+
+	return nil
+}
+
 func removePopCover(page *rod.Page) {
 
 	// 先移除弹窗封面
@@ -271,7 +297,22 @@ func waitForUploadComplete(page *rod.Page, expectedCount int) error {
 	return errors.Errorf("第%d张图片上传超时(60s)，请检查网络连接和图片大小", expectedCount)
 }
 
+type submitAction string
+
+const (
+	submitActionPublish submitAction = "publish"
+	submitActionDraft   submitAction = "draft"
+)
+
 func submitPublish(page *rod.Page, title, content string, tags []string, scheduleTime *time.Time, isOriginal bool, visibility string, products []string) error {
+	return submitContentAction(page, title, content, tags, scheduleTime, isOriginal, visibility, products, submitActionPublish)
+}
+
+func submitDraft(page *rod.Page, title, content string, tags []string, scheduleTime *time.Time, isOriginal bool, visibility string, products []string) error {
+	return submitContentAction(page, title, content, tags, scheduleTime, isOriginal, visibility, products, submitActionDraft)
+}
+
+func submitContentAction(page *rod.Page, title, content string, tags []string, scheduleTime *time.Time, isOriginal bool, visibility string, products []string, action submitAction) error {
 	titleElem, err := page.Element("div.d-input input")
 	if err != nil {
 		return errors.Wrap(err, "查找标题输入框失败")
@@ -280,7 +321,6 @@ func submitPublish(page *rod.Page, title, content string, tags []string, schedul
 		return errors.Wrap(err, "输入标题失败")
 	}
 
-	// 检查标题长度
 	time.Sleep(500 * time.Millisecond)
 	if err := checkTitleMaxLength(page); err != nil {
 		return err
@@ -305,13 +345,11 @@ func submitPublish(page *rod.Page, title, content string, tags []string, schedul
 
 	time.Sleep(1 * time.Second)
 
-	// 检查正文长度
 	if err := checkContentMaxLength(page); err != nil {
 		return err
 	}
 	slog.Info("检查正文长度：通过")
 
-	// 处理定时发布
 	if scheduleTime != nil {
 		if err := setSchedulePublish(page, *scheduleTime); err != nil {
 			return errors.Wrap(err, "设置定时发布失败")
@@ -319,12 +357,10 @@ func submitPublish(page *rod.Page, title, content string, tags []string, schedul
 		slog.Info("定时发布设置完成", "schedule_time", scheduleTime.Format("2006-01-02 15:04"))
 	}
 
-	// 设置可见范围
 	if err := setVisibility(page, visibility); err != nil {
 		return errors.Wrap(err, "设置可见范围失败")
 	}
 
-	// 处理原创声明
 	if isOriginal {
 		if err := setOriginal(page); err != nil {
 			slog.Warn("设置原创声明失败，继续发布", "error", err)
@@ -333,21 +369,119 @@ func submitPublish(page *rod.Page, title, content string, tags []string, schedul
 		}
 	}
 
-	// 绑定商品
 	if err := bindProducts(page, products); err != nil {
 		return errors.Wrap(err, "绑定商品失败")
 	}
 
-	submitButton, err := page.Element(".publish-page-publish-btn button.bg-red")
-	if err != nil {
-		return errors.Wrap(err, "查找发布按钮失败")
-	}
-	if err := submitButton.Click(proto.InputMouseButtonLeft, 1); err != nil {
-		return errors.Wrap(err, "点击发布按钮失败")
+	if err := clickSubmitActionButton(page, action); err != nil {
+		return err
 	}
 
 	time.Sleep(3 * time.Second)
 	return nil
+}
+
+func clickSubmitActionButton(page *rod.Page, action submitAction) error {
+	switch action {
+	case submitActionPublish:
+		if err := clickPreferredActionButton(page, ".publish-page-publish-btn button.bg-red", []string{"\u53d1\u5e03"}); err == nil {
+			return nil
+		}
+		return clickActionButtonByText(page, []string{"\u53d1\u5e03"})
+	case submitActionDraft:
+		return clickActionButtonByText(page, []string{
+			"\u6682\u5b58\u79bb\u5f00",
+			"\u6682\u5b58",
+			"\u5b58\u8349\u7a3f",
+			"\u4fdd\u5b58\u8349\u7a3f",
+		})
+	default:
+		return errors.Errorf("不支持的提交动作: %s", action)
+	}
+}
+
+func clickPreferredActionButton(page *rod.Page, selector string, textHints []string) error {
+	btn, err := page.Element(selector)
+	if err != nil || btn == nil {
+		return errors.Errorf("未找到首选操作按钮: %s", selector)
+	}
+	if !isElementVisible(btn) {
+		return errors.Errorf("首选操作按钮不可见: %s", selector)
+	}
+
+	text, err := btn.Text()
+	if err == nil && len(textHints) > 0 && !buttonTextMatches(text, textHints) {
+		return errors.Errorf("首选操作按钮文本不匹配: %s", text)
+	}
+
+	if err := btn.Click(proto.InputMouseButtonLeft, 1); err != nil {
+		return errors.Wrap(err, "点击首选操作按钮失败")
+	}
+	return nil
+}
+
+func clickActionButtonByText(page *rod.Page, candidates []string) error {
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		button, err := findActionButtonByText(page, candidates)
+		if err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		if button == nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		blocked, err := isElementBlocked(button)
+		if err == nil && blocked {
+			removePopCover(page)
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+
+		if err := button.Click(proto.InputMouseButtonLeft, 1); err != nil {
+			time.Sleep(200 * time.Millisecond)
+			continue
+		}
+		return nil
+	}
+
+	return errors.Errorf("未找到操作按钮: %v", candidates)
+}
+
+func findActionButtonByText(page *rod.Page, candidates []string) (*rod.Element, error) {
+	selectors := []string{"button", "div.d-button", `div[role="button"]`}
+	for _, selector := range selectors {
+		elems, err := page.Elements(selector)
+		if err != nil {
+			continue
+		}
+		for _, elem := range elems {
+			if !isElementVisible(elem) {
+				continue
+			}
+			text, err := elem.Text()
+			if err != nil {
+				continue
+			}
+			if buttonTextMatches(text, candidates) {
+				return elem, nil
+			}
+		}
+	}
+	return nil, nil
+}
+
+func buttonTextMatches(text string, candidates []string) bool {
+	normalized := strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(strings.TrimSpace(text))
+	for _, candidate := range candidates {
+		normalizedCandidate := strings.NewReplacer("\n", "", "\r", "", "\t", "", " ", "").Replace(strings.TrimSpace(candidate))
+		if normalizedCandidate != "" && strings.Contains(normalized, normalizedCandidate) {
+			return true
+		}
+	}
+	return false
 }
 
 // waitAndClickTitleInput 在填写正文后等待 1 秒并回点标题输入框，增强后续交互稳定性
