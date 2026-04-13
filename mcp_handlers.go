@@ -191,17 +191,17 @@ func (s *AppServer) handlePublishContent(ctx context.Context, args map[string]in
 
 // handleSaveDraft 处理保存草稿
 func (s *AppServer) handleSaveDraft(ctx context.Context, args map[string]interface{}) *MCPToolResult {
-	logrus.Info("MCP: 保存草稿")
+	logrus.Info("MCP: save draft")
 
 	req := buildPublishRequestFromArgs(args)
-	logrus.Infof("MCP: 保存草稿 - 标题: %s, 图片数量: %d, 标签数量: %d, 定时: %s, 原创: %v, visibility: %s, 商品: %v", req.Title, len(req.Images), len(req.Tags), req.ScheduleAt, req.IsOriginal, req.Visibility, req.Products)
+	logrus.Infof("MCP: save draft - title: %s, images: %d, tags: %d, schedule: %s, original: %v, visibility: %s, products: %v", req.Title, len(req.Images), len(req.Tags), req.ScheduleAt, req.IsOriginal, req.Visibility, req.Products)
 
 	result, err := s.xiaohongshuService.SaveDraft(ctx, req)
 	if err != nil {
 		return &MCPToolResult{
 			Content: []MCPContent{{
 				Type: "text",
-				Text: "保存草稿失败: " + err.Error(),
+				Text: "save draft failed: " + err.Error(),
 			}},
 			IsError: true,
 		}
@@ -210,14 +210,14 @@ func (s *AppServer) handleSaveDraft(ctx context.Context, args map[string]interfa
 	return &MCPToolResult{
 		Content: []MCPContent{{
 			Type: "text",
-			Text: fmt.Sprintf("草稿保存成功: %+v", result),
+			Text: fmt.Sprintf("draft saved: %+v", result),
 		}},
 	}
 }
 
 // handleListLocalDrafts 处理列出本地草稿
 func (s *AppServer) handlePublishLocalDraft(ctx context.Context, args map[string]interface{}) *MCPToolResult {
-	logrus.Info("MCP: 根据本地草稿发布")
+	logrus.Info("MCP: publish draft")
 
 	draftID, _ := args["draft_id"].(string)
 	draftID = strings.TrimSpace(draftID)
@@ -225,20 +225,20 @@ func (s *AppServer) handlePublishLocalDraft(ctx context.Context, args map[string
 		return &MCPToolResult{
 			Content: []MCPContent{{
 				Type: "text",
-				Text: "根据本地草稿发布失败: 缺少 draft_id 参数",
+				Text: "publish draft failed: missing draft_id",
 			}},
 			IsError: true,
 		}
 	}
 
-	logrus.Infof("MCP: 根据本地草稿发布 - draft_id: %s", draftID)
+	logrus.Infof("MCP: publish draft - draft_id: %s", draftID)
 
 	result, err := s.xiaohongshuService.PublishLocalDraft(ctx, draftID)
 	if err != nil {
 		return &MCPToolResult{
 			Content: []MCPContent{{
 				Type: "text",
-				Text: "根据本地草稿发布失败: " + err.Error(),
+				Text: "publish draft failed: " + err.Error(),
 			}},
 			IsError: true,
 		}
@@ -247,21 +247,20 @@ func (s *AppServer) handlePublishLocalDraft(ctx context.Context, args map[string
 	return &MCPToolResult{
 		Content: []MCPContent{{
 			Type: "text",
-			Text: fmt.Sprintf("本地草稿发布成功: %+v", result),
+			Text: fmt.Sprintf("draft published: %+v", result),
 		}},
 	}
 }
 
 func (s *AppServer) handleListLocalDrafts(ctx context.Context) *MCPToolResult {
-
-	logrus.Info("MCP: 列出本地草稿")
+	logrus.Info("MCP: list drafts")
 
 	result, err := s.xiaohongshuService.ListLocalDrafts(ctx)
 	if err != nil {
 		return &MCPToolResult{
 			Content: []MCPContent{{
 				Type: "text",
-				Text: "列出本地草稿失败: " + err.Error(),
+				Text: "list drafts failed: " + err.Error(),
 			}},
 			IsError: true,
 		}
@@ -272,7 +271,7 @@ func (s *AppServer) handleListLocalDrafts(ctx context.Context) *MCPToolResult {
 		return &MCPToolResult{
 			Content: []MCPContent{{
 				Type: "text",
-				Text: "序列化本地草稿失败: " + err.Error(),
+				Text: "marshal drafts failed: " + err.Error(),
 			}},
 			IsError: true,
 		}

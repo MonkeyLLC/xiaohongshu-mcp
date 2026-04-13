@@ -6,6 +6,7 @@ require (
 	github.com/avast/retry-go/v4 v4.7.0
 	github.com/gin-gonic/gin v1.10.1
 	github.com/go-rod/rod v0.116.2
+	github.com/go-sql-driver/mysql v1.8.1
 	github.com/h2non/filetype v1.1.3
 	github.com/modelcontextprotocol/go-sdk v0.7.0
 	github.com/pkg/errors v0.9.1
@@ -15,6 +16,7 @@ require (
 )
 
 require (
+	filippo.io/edwards25519 v1.1.0 // indirect
 	github.com/bytedance/sonic v1.11.6 // indirect
 	github.com/bytedance/sonic/loader v0.1.1 // indirect
 	github.com/cloudwego/base64x v0.1.4 // indirect

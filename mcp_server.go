@@ -29,7 +29,7 @@ type PublishContentArgs struct {
 
 // PublishVideoArgs 发布视频的参数（仅支持本地单个视频文件）
 type PublishLocalDraftArgs struct {
-	DraftID string `json:"draft_id" jsonschema:"本地草稿 ID，可通过 list_local_drafts 获取"`
+	DraftID string `json:"draft_id" jsonschema:"Draft ID from list_local_drafts"`
 }
 
 type PublishVideoArgs struct {
@@ -235,7 +235,7 @@ func registerTools(server *mcp.Server, appServer *AppServer) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "save_draft",
-			Description: "保存小红书图文内容到草稿箱",
+			Description: "Save image post to draft box (requires MySQL)",
 			Annotations: &mcp.ToolAnnotations{
 				Title:           "保存草稿",
 				DestructiveHint: boolPtr(true),
@@ -260,7 +260,7 @@ func registerTools(server *mcp.Server, appServer *AppServer) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "list_local_drafts",
-			Description: "列出本地已保存的小红书草稿",
+			Description: "List saved drafts in draft box (requires MySQL)",
 			Annotations: &mcp.ToolAnnotations{
 				Title:        "列出本地草稿",
 				ReadOnlyHint: true,
@@ -275,7 +275,7 @@ func registerTools(server *mcp.Server, appServer *AppServer) {
 	mcp.AddTool(server,
 		&mcp.Tool{
 			Name:        "publish_local_draft",
-			Description: "根据本地草稿 ID 发布已保存的小红书草稿",
+			Description: "Publish a saved draft by draft ID (requires MySQL)",
 			Annotations: &mcp.ToolAnnotations{
 				Title:           "发布本地草稿",
 				DestructiveHint: boolPtr(true),

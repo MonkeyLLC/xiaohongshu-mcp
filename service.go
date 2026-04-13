@@ -20,11 +20,15 @@ import (
 )
 
 // XiaohongshuService 小红书业务服务
-type XiaohongshuService struct{}
+type XiaohongshuService struct {
+	draftStore draftstore.Store
+}
 
 // NewXiaohongshuService 创建小红书服务实例
 func NewXiaohongshuService() *XiaohongshuService {
-	return &XiaohongshuService{}
+	return &XiaohongshuService{
+		draftStore: draftstore.NewStoreFromEnv(),
+	}
 }
 
 // PublishRequest 发布请求
@@ -199,6 +203,10 @@ func (s *XiaohongshuService) PublishContent(ctx context.Context, req *PublishReq
 
 // SaveDraft 保存图文内容到草稿箱
 func (s *XiaohongshuService) SaveDraft(ctx context.Context, req *PublishRequest) (*PublishResponse, error) {
+	if err := s.draftStore.EnsureReady(ctx); err != nil {
+		return nil, err
+	}
+
 	content, err := s.preparePublishImageContent(req)
 	if err != nil {
 		return nil, err
@@ -209,7 +217,7 @@ func (s *XiaohongshuService) SaveDraft(ctx context.Context, req *PublishRequest)
 		return nil, err
 	}
 
-	localDraft, err := draftstore.SaveLocalDraft(draftstore.SaveInput{
+	storedDraft, err := s.draftStore.Save(ctx, draftstore.SaveInput{
 		Title:               req.Title,
 		Content:             req.Content,
 		Tags:                req.Tags,
@@ -221,7 +229,7 @@ func (s *XiaohongshuService) SaveDraft(ctx context.Context, req *PublishRequest)
 		Products:            req.Products,
 	})
 	if err != nil {
-		logrus.Errorf("failed to save local draft: title=%s %v", content.Title, err)
+		logrus.Errorf("failed to save draft into mysql: title=%s %v", content.Title, err)
 		return nil, err
 	}
 
@@ -229,9 +237,9 @@ func (s *XiaohongshuService) SaveDraft(ctx context.Context, req *PublishRequest)
 		Title:     req.Title,
 		Content:   req.Content,
 		Images:    len(content.ImagePaths),
-		Status:    "草稿已保存",
-		DraftID:   localDraft.DraftID,
-		DraftPath: localDraft.DraftPath,
+		Status:    "draft saved",
+		DraftID:   storedDraft.DraftID,
+		DraftPath: storedDraft.DraftPath,
 	}, nil
 }
 
@@ -322,21 +330,21 @@ func (s *XiaohongshuService) saveDraftContent(ctx context.Context, content xiaoh
 
 // PublishLocalDraft 根据本地草稿发布
 func (s *XiaohongshuService) PublishLocalDraft(ctx context.Context, draftID string) (*PublishResponse, error) {
-	draft, err := draftstore.GetLocalDraft(draftID)
+	draft, err := s.draftStore.Get(ctx, draftID)
 	if err != nil {
 		return nil, err
 	}
 
 	if draft.Record == nil {
-		return nil, fmt.Errorf("草稿记录为空: %s", draftID)
+		return nil, fmt.Errorf("draft record is empty: %s", draftID)
 	}
 	if len(draft.Record.Images) == 0 {
-		return nil, fmt.Errorf("草稿未包含可发布图片: %s", draftID)
+		return nil, fmt.Errorf("draft does not contain publishable images: %s", draftID)
 	}
 
 	for _, imagePath := range draft.Record.Images {
 		if _, err := os.Stat(imagePath); err != nil {
-			return nil, fmt.Errorf("草稿图片不存在或不可访问: %s: %w", imagePath, err)
+			return nil, fmt.Errorf("draft image is missing or inaccessible: %s: %w", imagePath, err)
 		}
 	}
 
@@ -353,23 +361,21 @@ func (s *XiaohongshuService) PublishLocalDraft(ctx context.Context, draftID stri
 
 	result, err := s.PublishContent(ctx, req)
 	if err != nil {
-		logrus.Errorf("根据本地草稿发布失败: draft_id=%s %v", draftID, err)
+		logrus.Errorf("publish draft failed: draft_id=%s %v", draftID, err)
 		return nil, err
 	}
 
 	result.DraftID = draft.Record.ID
 	result.DraftPath = draft.DraftPath
-	result.Status = "本地草稿发布完成"
+	result.Status = "draft published"
 	return result, nil
 }
 
-// ListLocalDrafts 列出本地草稿
+// ListLocalDrafts lists saved drafts
 func (s *XiaohongshuService) ListLocalDrafts(ctx context.Context) (*draftstore.ListResult, error) {
-	_ = ctx
-
-	result, err := draftstore.ListLocalDrafts()
+	result, err := s.draftStore.List(ctx)
 	if err != nil {
-		logrus.Errorf("列出本地草稿失败: %v", err)
+		logrus.Errorf("list drafts failed: %v", err)
 		return nil, err
 	}
 
