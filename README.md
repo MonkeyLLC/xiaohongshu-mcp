@@ -479,6 +479,53 @@ go run .
 go run . -headless=false
 ```
 
+**配置 MySQL 草稿箱（可选）**：
+
+草稿箱相关功能 `save_draft`、`list_local_drafts`、`publish_local_draft` 依赖 MySQL。
+
+- **如果已配置 MySQL**：草稿会保存到 MySQL 中
+- **如果未配置 MySQL**：服务仍然可以正常启动，登录、搜索、发布等其他功能不受影响
+- **未配置 MySQL 时调用草稿箱功能**：会明确提示 MySQL 未配置
+
+默认会读取项目根目录下的 `configs/mysql.json`：
+
+```json
+{
+  "host": "161.118.246.241",
+  "port": "3306",
+  "database": "xhs_mcp",
+  "user": "root",
+  "password": "smwPwaEs19"
+}
+```
+
+也可以通过环境变量覆盖配置文件中的值：
+
+```bash
+export XHS_MYSQL_HOST=161.118.246.241
+export XHS_MYSQL_PORT=3306
+export XHS_MYSQL_DATABASE=xhs_mcp
+export XHS_MYSQL_USER=root
+export XHS_MYSQL_PASSWORD=smwPwaEs19
+```
+
+如果你希望直接使用 DSN，也可以设置：
+
+```bash
+export XHS_MYSQL_DSN='root:smwPwaEs19@tcp(161.118.246.241:3306)/xhs_mcp?charset=utf8mb4&parseTime=true&loc=Local'
+```
+
+Windows PowerShell 示例：
+
+```powershell
+$env:XHS_MYSQL_HOST="161.118.246.241"
+$env:XHS_MYSQL_PORT="3306"
+$env:XHS_MYSQL_DATABASE="xhs_mcp"
+$env:XHS_MYSQL_USER="root"
+$env:XHS_MYSQL_PASSWORD="smwPwaEs19"
+go run . -headless=true -port :18060
+```
+
 **配置代理（可选）**：
 
 如果需要通过代理访问，可以设置 `XHS_PROXY` 环境变量：
